@@ -19,6 +19,16 @@ from urllib.parse import parse_qs, urlparse
 
 from PIL import Image
 
+SERVICE = "image-encoder"
+
+def log(level, message):
+    """The stack's shared log line (observability/README.md in the aggregator repo): ISO
+    time, level, cid/trace placeholders (this stdlib stack sets neither), service, message."""
+    from datetime import datetime, timezone
+    stamp = datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+    print(f"{stamp} {level:<5} [cid=-] [trace=-] {SERVICE} - {message}", flush=True)
+
+
 SUPPORTED = {"webp", "png", "jpeg"}
 DEFAULT_QUALITY = 82
 
@@ -82,10 +92,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def log_message(self, fmt, *args):
-        print(f"image-encoder: {self.command} {self.path}")
+        log("INFO", f"{self.command} {self.path}")
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8087"))
-    print(f"image-encoder listening on {port}")
+    log("INFO", f"image-encoder listening on {port}")
     ThreadingHTTPServer(("", port), Handler).serve_forever()
