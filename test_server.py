@@ -174,6 +174,11 @@ class HttpTest(unittest.TestCase):
             self.assertEqual(400, resp.status)
             self.assertIn(b"quality", resp.read())
             self.assertTrue(resp.will_close, "an unread body means the connection must close")
+            # under HTTP/1.0 will_close is ALWAYS true, so the line above alone proves
+            # nothing — the explicit header is the non-tautological witness that the
+            # refusal path really closes, and it would keep failing after an HTTP/1.1 bump
+            self.assertEqual("close", resp.getheader("Connection"),
+                             "an early refusal must say Connection: close on the wire")
         finally:
             conn.close()
 
@@ -191,6 +196,10 @@ class HttpTest(unittest.TestCase):
             self.assertEqual(400, resp.status)
             self.assertIn(b"quality", resp.read())
             self.assertTrue(resp.will_close, "an unread body means the connection must close")
+            # see test_bad_quality...: will_close is tautological under HTTP/1.0; the
+            # explicit header is what proves the refusal path closes on purpose
+            self.assertEqual("close", resp.getheader("Connection"),
+                             "an early refusal must say Connection: close on the wire")
         finally:
             conn.close()
 
@@ -201,6 +210,10 @@ class HttpTest(unittest.TestCase):
             resp = conn.getresponse()
             self.assertEqual(404, resp.status)
             self.assertTrue(resp.will_close, "an unknown path is refused early and closed")
+            # will_close is always true under HTTP/1.0 — the explicit header is the
+            # assertion with teeth (it survives, and matters after, a bump to HTTP/1.1)
+            self.assertEqual("close", resp.getheader("Connection"),
+                             "an early refusal must say Connection: close on the wire")
         finally:
             conn.close()
 

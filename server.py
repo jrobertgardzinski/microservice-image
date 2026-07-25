@@ -98,10 +98,13 @@ class Handler(BaseHTTPRequestHandler):
 
     Under 1.0 every response closes the connection, so an early refusal that never reads
     the request body cannot poison a keep-alive stream — the unread bytes die with the
-    socket. Each early-refusal path below *also* sets close_connection = True explicitly,
-    so the invariant is stated where it matters and survives a protocol bump. If this is
-    ever switched to HTTP/1.1 (protocol_version = "HTTP/1.1"), that explicit close is
-    what keeps refused-before-read requests safe; the alternative would be draining
+    socket. Each early-refusal path below *also* closes explicitly (close=True sends a
+    literal `Connection: close` header, which makes BaseHTTPRequestHandler set
+    close_connection = True), so the invariant is stated where it matters, is visible on
+    the wire, and survives a protocol bump. Under HTTP/1.0 the client would close anyway
+    (will_close is always true), so the explicit header is what the tests assert on — a
+    non-tautological check that would still fail if a refusal path lost its close after a
+    switch to HTTP/1.1 (protocol_version = "HTTP/1.1"). The alternative would be draining
     Content-Length bytes before answering, which invites exactly the slow/oversized-body
     abuse the guard-rails exist to refuse."""
 
@@ -113,15 +116,13 @@ class Handler(BaseHTTPRequestHandler):
         else:
             # same early-refusal rule as do_POST's unknown path: close, so any bytes a
             # confused client might still send die with the socket
-            self.close_connection = True
-            self._json(404, {"error": "not found"})
+            self._json(404, {"error": "not found"}, close=True)
 
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path != "/encode":
             # early refusal, body never read — close, don't leave unread bytes on the wire
-            self.close_connection = True
-            self._json(404, {"error": "not found"})
+            self._json(404, {"error": "not found"}, close=True)
             return
         query = parse_qs(parsed.query)
         fmt = query.get("format", ["webp"])[0].lower()
@@ -129,34 +130,31 @@ class Handler(BaseHTTPRequestHandler):
         try:
             quality = int(raw_quality)
         except ValueError:
-            self.close_connection = True
-            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"})
+            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"},
+                       close=True)
             return
         if not 0 <= quality <= 100:
             # the range check lives here, next to the parse, so an out-of-range quality is
             # refused before a single body byte is read — same early-refusal rule as above
-            self.close_connection = True
-            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"})
+            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"},
+                       close=True)
             return
         declared = self.headers.get("Content-Length")
         if declared is None:
-            self.close_connection = True
-            self._json(411, {"error": "Content-Length required"})
+            self._json(411, {"error": "Content-Length required"}, close=True)
             return
         try:
             length = int(declared)
         except ValueError:
-            self.close_connection = True
-            self._json(400, {"error": f"malformed Content-Length: {declared}"})
+            self._json(400, {"error": f"malformed Content-Length: {declared}"}, close=True)
             return
         if length < 0:
-            self.close_connection = True
-            self._json(400, {"error": f"malformed Content-Length: {declared}"})
+            self._json(400, {"error": f"malformed Content-Length: {declared}"}, close=True)
             return
         if length > MAX_UPLOAD_BYTES:
             # refuse on the declared size, before reading a single body byte
-            self.close_connection = True
-            self._json(413, {"error": f"body too large: {length} > {MAX_UPLOAD_BYTES} bytes"})
+            self._json(413, {"error": f"body too large: {length} > {MAX_UPLOAD_BYTES} bytes"},
+                       close=True)
             return
         data = self.rfile.read(length)
         try:
@@ -170,11 +168,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def _json(self, status, body):
+    def _json(self, status, body, close=False):
         payload = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
+        if close:
+            # an explicit `Connection: close` on the wire for early refusals: send_header
+            # also flips close_connection, so the socket really does die with the response
+            # — stated per refusal path, independent of the HTTP/1.0 default close
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(payload)
 
