@@ -177,6 +177,33 @@ class HttpTest(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_out_of_range_quality_with_huge_declared_body_answers_and_closes(self):
+        # the twin of the parse-failure test above: quality=101 parses fine but is out of
+        # range, and the refusal must be just as early — declare 8 MiB, send one byte, and
+        # the 400 must come back immediately (3s client timeout) with the connection closed
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        try:
+            conn.putrequest("POST", "/encode?format=webp&quality=101")
+            conn.putheader("Content-Length", str(8 * 1024 * 1024))
+            conn.endheaders()
+            conn.send(b"x")   # 8 MiB - 1 never arrives; the server must answer anyway
+            resp = conn.getresponse()
+            self.assertEqual(400, resp.status)
+            self.assertIn(b"quality", resp.read())
+            self.assertTrue(resp.will_close, "an unread body means the connection must close")
+        finally:
+            conn.close()
+
+    def test_get_404_closes_the_connection(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.request("GET", "/no-such-path")
+            resp = conn.getresponse()
+            self.assertEqual(404, resp.status)
+            self.assertTrue(resp.will_close, "an unknown path is refused early and closed")
+        finally:
+            conn.close()
+
     def test_malformed_content_length_is_400(self):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
         try:

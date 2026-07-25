@@ -62,7 +62,9 @@ DEFAULT_QUALITY = 82
 def encode(data: bytes, fmt: str, quality: int) -> bytes:
     """Re-encode an image to the target format. Raises ValueError on an unreadable or
     oversized image, an unsupported format, an out-of-range quality, or an image the target
-    encoder cannot write — the boundary turns every one of those into a 400."""
+    encoder cannot write — the boundary turns every one of those into a 400. The quality
+    range is already refused in do_POST (before the body is read); the check here is a
+    defensive guard for direct callers of this function."""
     if fmt not in SUPPORTED:
         raise ValueError(f"unsupported format: {fmt}")
     if not 0 <= quality <= 100:
@@ -109,6 +111,9 @@ class Handler(BaseHTTPRequestHandler):
         if urlparse(self.path).path == "/health":
             self._json(200, {"status": "UP"})
         else:
+            # same early-refusal rule as do_POST's unknown path: close, so any bytes a
+            # confused client might still send die with the socket
+            self.close_connection = True
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -124,6 +129,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             quality = int(raw_quality)
         except ValueError:
+            self.close_connection = True
+            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"})
+            return
+        if not 0 <= quality <= 100:
+            # the range check lives here, next to the parse, so an out-of-range quality is
+            # refused before a single body byte is read — same early-refusal rule as above
             self.close_connection = True
             self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"})
             return
