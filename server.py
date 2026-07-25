@@ -62,9 +62,9 @@ DEFAULT_QUALITY = 82
 def encode(data: bytes, fmt: str, quality: int) -> bytes:
     """Re-encode an image to the target format. Raises ValueError on an unreadable or
     oversized image, an unsupported format, an out-of-range quality, or an image the target
-    encoder cannot write — the boundary turns every one of those into a 400. The quality
-    range is already refused in do_POST (before the body is read); the check here is a
-    defensive guard for direct callers of this function."""
+    encoder cannot write — the boundary turns every one of those into a 400. The format
+    whitelist and the quality range are already refused in do_POST (before the body is
+    read); the checks here are defensive guards for direct callers of this function."""
     if fmt not in SUPPORTED:
         raise ValueError(f"unsupported format: {fmt}")
     if not 0 <= quality <= 100:
@@ -126,6 +126,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         query = parse_qs(parsed.query)
         fmt = query.get("format", ["webp"])[0].lower()
+        if fmt not in SUPPORTED:
+            # the format is known from the query string alone — refuse it here, before a
+            # single body byte is read, same early-refusal rule as quality below (it used
+            # to be rejected only in encode(), AFTER the whole body had been read)
+            self._json(400, {"error": f"unsupported format: {fmt}"}, close=True)
+            return
         raw_quality = query.get("quality", [str(DEFAULT_QUALITY)])[0]
         try:
             quality = int(raw_quality)

@@ -127,6 +127,28 @@ class HttpTest(unittest.TestCase):
         status, _, _ = self._post("/encode?format=tiff", _png())
         self.assertEqual(400, status)
 
+    def test_unsupported_format_with_huge_declared_body_answers_and_closes(self):
+        # the twin of the quality tests below: the format is known from the query string,
+        # so the refusal must be just as early — declare 8 MiB, send one byte, and the 400
+        # must come back immediately with the connection closed behind it (it used to be
+        # refused only in encode(), AFTER the whole body had been read)
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        try:
+            conn.putrequest("POST", "/encode?format=gif")
+            conn.putheader("Content-Length", str(8 * 1024 * 1024))
+            conn.endheaders()
+            conn.send(b"x")   # 8 MiB - 1 never arrives; the server must answer anyway
+            resp = conn.getresponse()
+            self.assertEqual(400, resp.status)
+            self.assertIn(b"unsupported format", resp.read())
+            self.assertTrue(resp.will_close, "an unread body means the connection must close")
+            # will_close is always true under HTTP/1.0 — the explicit header is the
+            # non-tautological witness that the refusal path really closes
+            self.assertEqual("close", resp.getheader("Connection"),
+                             "an early refusal must say Connection: close on the wire")
+        finally:
+            conn.close()
+
     def test_bad_quality_is_400(self):
         for bad in ("-5", "100000", "abc"):
             with self.subTest(quality=bad):
