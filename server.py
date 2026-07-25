@@ -25,6 +25,14 @@ Behaviour change (2026-07): `quality` is validated, not corrected. Anything that
 integer in 0..100 is now a 400 — a non-integer used to be silently replaced by the default,
 and out-of-range values were passed through to Pillow (accepted for JPEG, accidental 400 for
 WebP). One rule now, stated here.
+
+A PRESENT-BUT-EMPTY parameter is a mistake, not an omission: `?format=` and `?quality=` are
+both 400s, never the default. The query is parsed with `keep_blank_values=True` precisely so
+those reach the checks — `parse_qs` drops blank values by default, which used to make
+`?format=&quality=80` fall through to webp, i.e. silently encode to a format the caller never
+asked for. Omitting a parameter entirely still means "use the default"; typing `=` and nothing
+after it means the caller computed a value and got an empty string, and guessing on their
+behalf is exactly the correction this service stopped doing.
 """
 
 import io
@@ -124,25 +132,32 @@ class Handler(BaseHTTPRequestHandler):
             # early refusal, body never read — close, don't leave unread bytes on the wire
             self._json(404, {"error": "not found"}, close=True)
             return
-        query = parse_qs(parsed.query)
+        # keep_blank_values: `?format=` must reach the whitelist check as the empty string and
+        # be refused, not be dropped by parse_qs and quietly become the webp default (see the
+        # module docstring — a present-but-empty parameter is a mistake, not an omission)
+        query = parse_qs(parsed.query, keep_blank_values=True)
         fmt = query.get("format", ["webp"])[0].lower()
         if fmt not in SUPPORTED:
             # the format is known from the query string alone — refuse it here, before a
             # single body byte is read, same early-refusal rule as quality below (it used
             # to be rejected only in encode(), AFTER the whole body had been read)
-            self._json(400, {"error": f"unsupported format: {fmt}"}, close=True)
+            # quoted on purpose: `?format=` is a real client mistake and "unsupported
+            # format: " with nothing after it would read like a server bug
+            self._json(400, {"error": f"unsupported format: {fmt!r}"}, close=True)
             return
+        # an omitted quality means the default; a blank one (`?quality=`) reaches int() as ""
+        # and is refused there, deliberately — see the module docstring
         raw_quality = query.get("quality", [str(DEFAULT_QUALITY)])[0]
         try:
             quality = int(raw_quality)
         except ValueError:
-            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"},
+            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality!r}"},
                        close=True)
             return
         if not 0 <= quality <= 100:
             # the range check lives here, next to the parse, so an out-of-range quality is
             # refused before a single body byte is read — same early-refusal rule as above
-            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality}"},
+            self._json(400, {"error": f"quality must be an integer in 0..100, got: {raw_quality!r}"},
                        close=True)
             return
         declared = self.headers.get("Content-Length")

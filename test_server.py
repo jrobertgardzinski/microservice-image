@@ -155,6 +155,46 @@ class HttpTest(unittest.TestCase):
                 status, _, _ = self._post(f"/encode?format=jpeg&quality={bad}", _png())
                 self.assertEqual(400, status)
 
+    def test_blank_format_is_400_not_the_default(self):
+        # `?format=` used to vanish in parse_qs (blank values are dropped by default) and the
+        # request quietly encoded to webp — a format the caller never asked for. Present but
+        # empty is a mistake, not an omission; keep_blank_values makes it reach the whitelist
+        status, _, body = self._post("/encode?format=&quality=80", _png())
+        self.assertEqual(400, status)
+        self.assertIn(b"unsupported format", body)
+
+    def test_blank_quality_is_400_not_the_default(self):
+        # the twin of the above, and the same rule the module docstring states: a blank
+        # quality is refused rather than corrected to DEFAULT_QUALITY
+        status, _, body = self._post("/encode?format=webp&quality=", _png())
+        self.assertEqual(400, status)
+        self.assertIn(b"quality", body)
+
+    def test_omitted_parameters_still_mean_the_defaults(self):
+        # the other half of the contract: NOT typing a parameter is still an omission, and
+        # omissions still take the defaults (webp at DEFAULT_QUALITY)
+        status, ctype, body = self._post("/encode", _png())
+        self.assertEqual(200, status)
+        self.assertEqual("image/webp", ctype)
+        self.assertEqual("WEBP", Image.open(io.BytesIO(body)).format)
+
+    def test_blank_format_with_huge_declared_body_answers_and_closes(self):
+        # a blank format is refused exactly as early as an unsupported one: declare 8 MiB,
+        # send one byte, and the 400 must come back immediately with the connection closed
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        try:
+            conn.putrequest("POST", "/encode?format=")
+            conn.putheader("Content-Length", str(8 * 1024 * 1024))
+            conn.endheaders()
+            conn.send(b"x")   # 8 MiB - 1 never arrives; the server must answer anyway
+            resp = conn.getresponse()
+            self.assertEqual(400, resp.status)
+            self.assertIn(b"unsupported format", resp.read())
+            self.assertEqual("close", resp.getheader("Connection"),
+                             "an early refusal must say Connection: close on the wire")
+        finally:
+            conn.close()
+
     def test_la_png_to_jpeg_is_flattened_not_a_torn_connection(self):
         # before the save() barrier + mode flattening this OSError'd mid-request and the
         # client saw a dropped connection; now the encode simply succeeds
