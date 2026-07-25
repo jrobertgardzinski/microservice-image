@@ -162,6 +162,11 @@ class HttpTest(unittest.TestCase):
         status, _, body = self._post("/encode?format=&quality=80", _png())
         self.assertEqual(400, status)
         self.assertIn(b"unsupported format", body)
+        # the !r in the message is part of the contract, not decoration: without it the body
+        # reads "unsupported format: " and looks like the server dropped the value. Nothing
+        # pinned that before, so a change back to {} broke no test
+        self.assertIn(b"''", body,
+                      "the empty value must be visible in the message, quoted")
 
     def test_blank_quality_is_400_not_the_default(self):
         # the twin of the above, and the same rule the module docstring states: a blank
@@ -169,6 +174,33 @@ class HttpTest(unittest.TestCase):
         status, _, body = self._post("/encode?format=webp&quality=", _png())
         self.assertEqual(400, status)
         self.assertIn(b"quality", body)
+        self.assertIn(b"''", body,
+                      "the empty value must be visible in the message, quoted")
+
+    def test_whitespace_is_padding_for_both_parameters(self):
+        # one rule for whitespace, applied to both: padding is trimmed, and a value that is
+        # nothing but padding is EMPTY, i.e. refused. Before the strip these disagreed —
+        # `?quality=%2082` was accepted (int() ignores whitespace, the very correction this
+        # service stopped doing) while `?format=%20png` was a 400
+        status, ctype, _ = self._post("/encode?format=%20png%20&quality=%2082%20", _png())
+        self.assertEqual(200, status, "padding around a valid value is trimmed, not refused")
+        self.assertEqual("image/png", ctype)
+        for blank in ("format", "quality"):
+            with self.subTest(parameter=blank):
+                status, _, body = self._post(f"/encode?{blank}=%20%20", _png())
+                self.assertEqual(400, status, "whitespace-only is empty, and empty is a mistake")
+                self.assertIn(b"''", body)
+
+    def test_a_repeated_parameter_takes_its_first_occurrence(self):
+        # no schema for a query string, so the parse_qs [0] convention stands: the FIRST
+        # occurrence is the value that is used, and the rules apply to THAT one. Hence the
+        # asymmetry, which is deliberate and documented in the module docstring
+        status, ctype, _ = self._post("/encode?format=png&format=", _png())
+        self.assertEqual(200, status, "the blank came second — it is never the value used")
+        self.assertEqual("image/png", ctype)
+        status, _, body = self._post("/encode?format=&format=png", _png())
+        self.assertEqual(400, status, "the blank came first — that IS the value used")
+        self.assertIn(b"unsupported format", body)
 
     def test_omitted_parameters_still_mean_the_defaults(self):
         # the other half of the contract: NOT typing a parameter is still an omission, and
@@ -285,7 +317,25 @@ class HttpTest(unittest.TestCase):
             conn.putrequest("POST", "/encode?format=webp")
             conn.putheader("Content-Length", "banana")
             conn.endheaders()
-            self.assertEqual(400, conn.getresponse().status)
+            resp = conn.getresponse()
+            self.assertEqual(400, resp.status)
+            self.assertIn(b"'banana'", resp.read(),
+                          "the offending value is quoted in the message")
+        finally:
+            conn.close()
+
+    def test_empty_content_length_is_400_with_a_visible_empty_value(self):
+        # the same empty-tail problem the quoting was introduced for: `Content-Length:` with
+        # nothing after it used to answer "malformed Content-Length: " and read like the
+        # server had lost the value it was complaining about
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            conn.putrequest("POST", "/encode?format=webp")
+            conn.putheader("Content-Length", "")
+            conn.endheaders()
+            resp = conn.getresponse()
+            self.assertEqual(400, resp.status)
+            self.assertIn(b"malformed Content-Length: ''", resp.read())
         finally:
             conn.close()
 

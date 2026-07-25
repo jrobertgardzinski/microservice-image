@@ -33,6 +33,19 @@ those reach the checks — `parse_qs` drops blank values by default, which used 
 asked for. Omitting a parameter entirely still means "use the default"; typing `=` and nothing
 after it means the caller computed a value and got an empty string, and guessing on their
 behalf is exactly the correction this service stopped doing.
+
+Both values are `.strip()`ed before that check, so "empty" means empty to both parameters.
+Without it `?quality=%2082` was accepted (int() ignores surrounding whitespace and silently
+"corrected" the value) while the same padding on `?format=%20png` was a 400, and `?quality=%20`
+was empty to int() but not to the emptiness rule — one rule, applied to whitespace the same way
+on both. Padding is now trimmed for both and a value that is whitespace-only is empty, i.e. 400.
+
+A REPEATED parameter (`?format=png&format=`) takes its FIRST occurrence, the long-standing
+parse_qs `[0]` convention — the query string has no schema, so "the first one wins" is as good
+a rule as any and is the one every caller of this service already gets. The interesting case is
+`?format=png&format=`: the blank is in second position and is therefore harmless, while
+`?format=&format=png` is a 400 because the blank came first. That asymmetry is deliberate — the
+rule is about the value that is USED, not about every value that was typed.
 """
 
 import io
@@ -136,7 +149,10 @@ class Handler(BaseHTTPRequestHandler):
         # be refused, not be dropped by parse_qs and quietly become the webp default (see the
         # module docstring — a present-but-empty parameter is a mistake, not an omission)
         query = parse_qs(parsed.query, keep_blank_values=True)
-        fmt = query.get("format", ["webp"])[0].lower()
+        # .strip(): whitespace is padding, never a value — `?format=%20png` is "png" and
+        # `?format=%20` is empty, i.e. refused, exactly like `?format=`. [0] = first
+        # occurrence wins for a repeated parameter (see the module docstring)
+        fmt = query.get("format", ["webp"])[0].strip().lower()
         if fmt not in SUPPORTED:
             # the format is known from the query string alone — refuse it here, before a
             # single body byte is read, same early-refusal rule as quality below (it used
@@ -146,8 +162,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": f"unsupported format: {fmt!r}"}, close=True)
             return
         # an omitted quality means the default; a blank one (`?quality=`) reaches int() as ""
-        # and is refused there, deliberately — see the module docstring
-        raw_quality = query.get("quality", [str(DEFAULT_QUALITY)])[0]
+        # and is refused there, deliberately — see the module docstring. Stripped first, so
+        # int() no longer gets to silently accept `?quality=%2082`: whitespace is trimmed by
+        # the same rule that governs format, and a whitespace-only value is empty, not 82.
+        raw_quality = query.get("quality", [str(DEFAULT_QUALITY)])[0].strip()
         try:
             quality = int(raw_quality)
         except ValueError:
@@ -167,10 +185,13 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(declared)
         except ValueError:
-            self._json(400, {"error": f"malformed Content-Length: {declared}"}, close=True)
+            # quoted for the same reason as the format and quality messages: `Content-Length:`
+            # with nothing after it is a real client mistake, and "malformed Content-Length: "
+            # with an empty tail reads like the server lost the value it was complaining about
+            self._json(400, {"error": f"malformed Content-Length: {declared!r}"}, close=True)
             return
         if length < 0:
-            self._json(400, {"error": f"malformed Content-Length: {declared}"}, close=True)
+            self._json(400, {"error": f"malformed Content-Length: {declared!r}"}, close=True)
             return
         if length > MAX_UPLOAD_BYTES:
             # refuse on the declared size, before reading a single body byte
