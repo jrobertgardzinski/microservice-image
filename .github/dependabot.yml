@@ -27,3 +27,31 @@ updates:
       patches:
         patterns: ["*"]
         update-types: ["patch"]
+
+  # The workflow pins of this repository (actions/checkout and friends). Added 2026-07-30: nothing
+  # watched them, so they sat on majors that were two to three releases behind.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Warsaw
+    open-pull-requests-limit: 10
+    labels: ["dependencies"]
+    groups:
+      patches:
+        patterns: ["*"]
+        update-types: ["patch"]
+
+  # Base images in this repository's Dockerfile. Added 2026-07-30: image tags were watched by nothing,
+  # so they kept whatever was current when the line was written.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Warsaw
+    open-pull-requests-limit: 10
+    labels: ["dependencies"]
