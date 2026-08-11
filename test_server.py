@@ -9,6 +9,7 @@ import threading
 import unittest
 from unittest import mock
 
+import allure
 from PIL import Image
 
 import server
@@ -27,6 +28,8 @@ def _png(width=200, height=200, mode="RGB"):
     return out.getvalue()
 
 
+@allure.epic("Use case")
+@allure.feature("Encode image")
 class EncodeTest(unittest.TestCase):
 
     def test_webp_is_a_valid_smaller_image(self):
@@ -79,6 +82,8 @@ class EncodeTest(unittest.TestCase):
                 encode(png, "webp", 80)
 
 
+@allure.epic("Infrastructure")
+@allure.feature("HTTP contract")
 class HttpTest(unittest.TestCase):
     """The boundary itself: a live server, real sockets, status codes as the contract."""
 

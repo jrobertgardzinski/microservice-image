@@ -1,0 +1,5 @@
+# Test-only dependencies (runtime stays Pillow-only, see requirements.txt).
+# pytest collects the stdlib-unittest suite natively; allure-pytest writes the
+# target/allure-results consumed by ../build_documentation.py.
+pytest
+allure-pytest

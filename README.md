@@ -16,4 +16,13 @@ quality, never availability.
 ```bash
 pip install -r requirements.txt && python3 server.py    # :8087
 python3 -m unittest test_server
+# dev: same suite via pytest, emitting the Allure results Documentation.md is built from
+pip install -r requirements-dev.txt
+python3 -m pytest --alluredir=target/allure-results test_server.py
 ```
+
+## Documentation
+
+[Documentation.md](./Documentation.md) is generated from the Allure results of this suite
+via [`../create-documentation.sh`](../create-documentation.sh) — run the pytest line above
+first, so `target/allure-results` exists.
